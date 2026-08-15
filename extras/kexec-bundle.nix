@@ -105,6 +105,17 @@
   systemd.services.sshd.wantedBy = lib.mkForce [ "multi-user.target" ];
   networking.hostName = lib.mkDefault "kexec";
 
+  # The bundle's whole point is SSH takeover: kexec_script above injects an
+  # `authorized_keys` into the initrd, and this copies it into the booted system.
+  #
+  # `boot.initrd.postMountCommands` is a scripted-stage-1 API and asserts out
+  # under systemd stage 1, so pin this format to scripted stage 1. That is what
+  # the nixos-generators original ran under, which keeps the port faithful rather
+  # than shipping an untested systemd-initrd translation. Porting it to
+  # `boot.initrd.systemd.services` (and /sysroot rather than /mnt-root) is
+  # tracked separately.
+  boot.initrd.systemd.enable = lib.mkForce false;
+
   boot.initrd.postMountCommands = ''
     mkdir -p /mnt-root/root/.ssh/
     cp /authorized_keys /mnt-root/root/.ssh/

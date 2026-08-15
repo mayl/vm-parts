@@ -122,13 +122,19 @@ A format is an ordinary NixOS module that also says which `system.build`
 attribute it produces.
 
 ```nix
-formatModules.my-appliance = { modulesPath, ... }: {
+formatModules.my-appliance = { config, modulesPath, ... }: {
   imports = [ "${modulesPath}/virtualisation/disk-image.nix" ];
   image.format = "raw";
-  format.attr = "image";      # default; the `system.build` attribute to build
-  format.filePath = "nixos.img";  # optional; enables `.file`
+
+  format.attr = "image";                    # default; which system.build attr to build
+  format.filePath = config.image.filePath;  # optional; enables `.file`
 };
 ```
+
+For an image-shaped format, take `format.filePath` from `config.image.filePath`
+rather than writing the filename out — that keeps `.file` in step with
+`image.baseName` and `image.extension` instead of drifting from them. For a
+format that produces no single artifact (a run script, say), leave it `null`.
 
 Defining a name that already exists **customises** it rather than replacing it —
 the module system merges the definitions. This is how nixos-generators'

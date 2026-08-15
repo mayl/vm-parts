@@ -3,27 +3,29 @@
 # Everything here is eval-only: it instantiates derivations but never builds a
 # disk image, so `nix flake check` stays cheap enough to run in CI. The one real
 # build lives in `buildChecks` and is deliberately kept out of the default set.
-{ pkgs, example }:
+{
+  pkgs,
+  example,
+  mkTestFlake,
+}:
 let
   inherit (pkgs) lib;
 
-  # Force derivations into existence without building them.
-  #
-  # `drv.drvPath` carries string context, so embedding it directly would make
-  # every listed format a build-time dependency of this check -- `nix flake check`
-  # would then build an ISO and a VirtualBox appliance, which is precisely what
-  # this check exists to avoid. Discarding the context keeps the instantiation
-  # (evaluating `drvPath` still writes the .drv) while dropping the build edge.
-  drvPaths =
-    name: paths:
-    pkgs.writeText "vm-parts-${name}" (
-      lib.concatMapStringsSep "\n" builtins.unsafeDiscardStringContext paths
-    );
-
-  assertMsg = cond: msg: if cond then true else throw "vm-parts check failed: ${msg}";
+  assertMsg = cond: msg: lib.assertMsg cond "vm-parts check failed: ${msg}";
 
   vboxConfig = example.inlineMachine.vbox.config;
   overrideConfig = example.overrideMachine.vbox.config;
+
+  # A machine whose name collides with a standard flake output. It gets its own
+  # flake evaluation because the guard throws while computing output attribute
+  # names, which would take the whole example down with it.
+  reservedNameFlake = mkTestFlake {
+    vms.packages = {
+      system = "x86_64-linux";
+      modules = [ ];
+      formats = [ "vm" ];
+    };
+  };
 
   units = [
     # An alias resolves to the upstream `image.modules` variant.
@@ -66,6 +68,12 @@ let
       !(builtins.tryEval example.brokenMachine.definitely-not-a-format).success
     ) "requesting an undefined format should throw")
 
+    # A machine named after a standard flake output is refused up front, rather
+    # than silently shadowing the real one.
+    (assertMsg (
+      !(builtins.tryEval (builtins.attrNames reservedNameFlake)).success
+    ) "a machine named `packages' should be refused")
+
     # Laziness: `boom` sits in inlineMachine's registry and would throw if it were
     # ever evaluated. Reaching a different format must not touch it. This is the
     # regression test for the invariant that the registry is indexed, never
@@ -76,15 +84,27 @@ in
 {
   checks = {
     # Instantiates every example format, building none of them.
+    #
+    # `drv.drvPath` carries string context, so embedding it directly would make
+    # every listed format a build-time dependency of this check -- `nix flake
+    # check` would then build an ISO and a VirtualBox appliance, which is exactly
+    # what this check exists to avoid. Discarding the context keeps the
+    # instantiation (evaluating `drvPath` still writes the .drv) while dropping
+    # the build edge.
     eval = builtins.seq (lib.all (x: x) units) (
-      drvPaths "example-drvpaths" [
-        example.inlineMachine.vm.drvPath
-        example.inlineMachine.vbox.drvPath
-        example.inlineMachine.vbox.file.drvPath
-        example.inlineMachine.iso.drvPath
-        example.adoptedMachine.vm.drvPath
-        example.overrideMachine.vbox.drvPath
-      ]
+      pkgs.writeText "vm-parts-example-drvpaths" (
+        lib.concatMapStringsSep "\n" builtins.unsafeDiscardStringContext [
+          example.inlineMachine.vm.drvPath
+          example.inlineMachine.vm-nogui.drvPath
+          example.inlineMachine.vbox.drvPath
+          example.inlineMachine.vbox.file.drvPath
+          example.inlineMachine.iso.drvPath
+          example.inlineMachine.kexec-bundle.drvPath
+          example.adoptedMachine.vm.drvPath
+          example.standaloneMachine.vm-bootloader.drvPath
+          example.overrideMachine.vbox.drvPath
+        ]
+      )
     );
   };
 

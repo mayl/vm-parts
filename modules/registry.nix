@@ -58,7 +58,7 @@ rec {
     }:
     let
       resolved = if registry ? ${format} then format else aliases.${format} or format;
-      aliasNote = if resolved == format then "" else " (via the alias `${format}' -> `${resolved}')";
+      aliasNote = lib.optionalString (resolved != format) " (via the alias `${format}' -> `${resolved}')";
     in
     registry.${resolved} or (throw ''
       vm-parts: vms.${name} requests the format `${format}'${aliasNote}, which is not defined.

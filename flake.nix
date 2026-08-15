@@ -52,7 +52,8 @@
         { pkgs, system, ... }:
         let
           example = import ./tests/example.nix { inherit inputs; };
-          tests = import ./tests/checks.nix { inherit pkgs example; };
+          mkTestFlake = import ./tests/mkflake.nix { inherit inputs; };
+          tests = import ./tests/checks.nix { inherit pkgs example mkTestFlake; };
           nixfmt = pkgs.nixfmt-tree or pkgs.nixfmt-rfc-style or pkgs.nixfmt;
         in
         {

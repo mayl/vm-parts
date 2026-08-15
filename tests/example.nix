@@ -1,12 +1,4 @@
 # Dogfood evaluation, used by the flake's checks.
-#
-# This is a plain function rather than a sub-flake. The usual trick for testing a
-# flake from within itself (nixos-generators' `callFlake`, which imports the
-# sub-flake and passes `self = subFlake`) does not survive contact with
-# flake-parts: `mkFlake`'s `moduleLocation` argument defaults to
-# "${self.outPath}/flake.nix", and forcing that on a self-referential attrset
-# with no `outPath` fails. Passing `inputs.self` and `moduleLocation` explicitly
-# sidesteps the whole problem.
 { inputs }:
 let
   inherit (inputs.nixpkgs) lib;
@@ -25,7 +17,8 @@ let
   };
 
   # A machine that is also a complete system, so it can be exported for
-  # nixos-rebuild.
+  # nixos-rebuild -- and so it can boot its own bootloader, which `vm-bootloader`
+  # requires.
   standalone = {
     imports = [ base ];
     boot.loader.grub.device = "/dev/sda";
@@ -46,72 +39,71 @@ let
   # code path actually evaluates the module.
   poison = name: { ... }: throw "vm-parts: unrequested format `${name}' was evaluated";
 in
-inputs.flake-parts.lib.mkFlake
-  {
-    inputs = inputs // {
-      self = {
-        outPath = ./.;
-        _type = "flake";
-      };
+import ./mkflake.nix { inherit inputs; } {
+  # A format defined once, for every machine.
+  formatModules.shared-iso =
+    { modulesPath, ... }:
+    {
+      imports = [ "${toString modulesPath}/installer/cd-dvd/installation-cd-base.nix" ];
+      format.attr = "image";
     };
-    moduleLocation = ./example.nix;
-  }
-  {
-    imports = [ ../flake-module.nix ];
-    systems = [ system ];
 
-    # A format defined once, for every machine.
-    formatModules.shared-iso =
-      { modulesPath, ... }:
-      {
-        imports = [ "${toString modulesPath}/installer/cd-dvd/installation-cd-base.nix" ];
-        format.attr = "image";
-      };
+  vms = {
+    # Built from modules, formats reached partly through an alias.
+    #
+    # `vm-nogui` and `kexec-bundle` are here purely for coverage: they are two of
+    # the four formats this project vendors itself (nixpkgs has no equivalent), so
+    # nothing but these checks would notice a nixpkgs bump breaking them.
+    # `kexec-bundle` especially -- it reaches into nixpkgs internals.
+    inlineMachine = {
+      inherit system;
+      modules = [ base ];
+      formats = [
+        "vm"
+        "vm-nogui"
+        "vbox"
+        "iso"
+        "kexec-bundle"
+      ];
 
-    vms = {
-      # Built from modules, formats reached partly through an alias.
-      inlineMachine = {
-        inherit system;
-        modules = [ base ];
-        formats = [
-          "vm"
-          "vbox"
-          "iso"
-        ];
-
-        # Never requested, and must never be evaluated.
-        formatModules.boom = poison "boom";
-      };
-
-      # Adopted from an already-evaluated configuration.
-      adoptedMachine = {
-        nixos = adopted;
-        formats = [ "vm" ];
-      };
-
-      # Opted in to a nixosConfigurations export, which it can afford because it
-      # describes a complete system.
-      standaloneMachine = {
-        inherit system;
-        modules = [ standalone ];
-        formats = [ "vm" ];
-        exportNixosConfiguration = true;
-      };
-
-      # Customising a built-in: this merges into the `image.modules` virtualbox
-      # variant rather than replacing it.
-      overrideMachine = {
-        inherit system;
-        modules = [ base ];
-        formats = [ "vbox" ];
-        formatModules.virtualbox.image.baseName = "custom-name";
-      };
-
-      # Only ever referenced from inside tryEval, to check the error path.
-      brokenMachine = {
-        inherit system;
-        modules = [ base ];
-        formats = [ "definitely-not-a-format" ];
-      };
+      # Never requested, and must never be evaluated.
+      formatModules.boom = poison "boom";
     };
-  }
+
+    # Adopted from an already-evaluated configuration.
+    adoptedMachine = {
+      nixos = adopted;
+      formats = [ "vm" ];
+    };
+
+    # Opted in to a nixosConfigurations export, which it can afford because it
+    # describes a complete system. `vm-bootloader` lives here rather than on
+    # `inlineMachine` for the same reason: booting through your own bootloader
+    # requires having one.
+    standaloneMachine = {
+      inherit system;
+      modules = [ standalone ];
+      formats = [
+        "vm"
+        "vm-bootloader"
+      ];
+      exportNixosConfiguration = true;
+    };
+
+    # Customising a built-in: this merges into the `image.modules` virtualbox
+    # variant rather than replacing it.
+    overrideMachine = {
+      inherit system;
+      modules = [ base ];
+      formats = [ "vbox" ];
+      formatModules.virtualbox.image.baseName = "custom-name";
+    };
+
+    # Only ever referenced from inside tryEval, to check the error path.
+    brokenMachine = {
+      inherit system;
+      modules = [ base ];
+      formats = [ "definitely-not-a-format" ];
+    };
+  };
+}
