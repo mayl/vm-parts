@@ -11,7 +11,6 @@ let
   # nixosConfiguration -- see `standaloneMachine` below for that case.
   base = {
     nixpkgs.hostPlatform = system;
-    users.users.root.initialPassword = "vm-parts";
     services.openssh.enable = true;
     system.stateVersion = "25.05";
   };
@@ -48,6 +47,13 @@ import ./mkflake.nix { inherit inputs; } {
       format.attr = "image";
     };
 
+  # A user alias, and a user override of a built-in one (`gce` normally means
+  # `google-compute`).
+  formatAliases = {
+    my-vbox = "virtualbox";
+    gce = "qemu";
+  };
+
   vms = {
     # Built from modules, formats reached partly through an alias.
     #
@@ -66,8 +72,10 @@ import ./mkflake.nix { inherit inputs; } {
         "kexec-bundle"
       ];
 
-      # Never requested, and must never be evaluated.
+      # Never requested, and must never be evaluated -- including when the
+      # formats are mirrored into `packages`.
       formatModules.boom = poison "boom";
+      exposeAsPackages = true;
     };
 
     # Adopted from an already-evaluated configuration.
@@ -97,6 +105,41 @@ import ./mkflake.nix { inherit inputs; } {
       modules = [ base ];
       formats = [ "vbox" ];
       formatModules.virtualbox.image.baseName = "custom-name";
+    };
+
+    # `outputName` must govern every output the machine produces, including the
+    # nixosConfigurations entry.
+    renamedMachine = {
+      inherit system;
+      modules = [ standalone ];
+      outputName = "renamed";
+      formats = [ "vm" ];
+      exportNixosConfiguration = true;
+    };
+
+    # Formats reached only through user-defined and user-overridden aliases.
+    aliasMachine = {
+      inherit system;
+      modules = [ base ];
+      formats = [
+        "my-vbox"
+        "gce"
+      ];
+    };
+
+    # The architecture-pinned SD card formats: the matching one works, the
+    # other must refuse rather than quietly build an x86_64 image.
+    sdMachine = {
+      inherit system;
+      modules = [
+        base
+        # The sd-card variant enables ZFS, and nixpkgs warns until this is set.
+        { boot.zfs.forceImportRoot = false; }
+      ];
+      formats = [
+        "sd-x86_64"
+        "sd-aarch64"
+      ];
     };
 
     # Only ever referenced from inside tryEval, to check the error path.

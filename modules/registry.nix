@@ -10,14 +10,14 @@
 rec {
   # Adapt a nixpkgs `image.modules` entry to the ./format-options.nix contract.
   #
-  # `mkDefault` on both, so that a user's `formatModules.<name>` definition can
-  # change either without needing `mkForce`.
+  # `format.attr` needs nothing: its option default is already `image`.
+  # `filePath` is set at `mkDefault`, so that a user's `formatModules.<name>`
+  # definition can change it without needing `mkForce`.
   mkImageFormat =
     module:
     { config, lib, ... }:
     {
       imports = [ module ];
-      format.attr = lib.mkDefault "image";
       # Safe here, unlike in format-options.nix: this configuration *is* an image,
       # so `image.extension` is defined by the module we just imported.
       format.filePath = lib.mkDefault config.image.filePath;
@@ -40,6 +40,41 @@ rec {
         '');
     in
     lib.mapAttrs (_: mkImageFormat) modules;
+
+  # nixos-generators' `sd-aarch64` / `sd-x86_64`, as upstream's `sd-card`
+  # pinned to one architecture.
+  #
+  # Upstream replaced the two with a single `sd-card` variant that picks the
+  # per-architecture module from the machine's own platform. An alias from the
+  # old names would therefore build an aarch64 image when asked for `sd-x86_64`
+  # on an aarch64 machine, without complaint. These wrap the registry's own
+  # `sd-card` entry -- so customisations of it still apply -- and fail with an
+  # assertion when the machine's architecture does not match the name.
+  #
+  # LAZINESS: the attribute names are static, so the caller can merge this into
+  # the registry it reads from without recursion; `registry.sd-card` is only
+  # reached if one of these formats is actually requested.
+  archPinnedFormats =
+    registry:
+    lib.genAttrs' [ "aarch64" "x86_64" ] (
+      arch:
+      lib.nameValuePair "sd-${arch}" (
+        { pkgs, ... }:
+        {
+          imports = [ registry.sd-card ];
+          assertions = [
+            {
+              assertion = pkgs.stdenv.hostPlatform.qemuArch == arch;
+              message = ''
+                vm-parts: the `sd-${arch}' format builds an ${arch} SD card image,
+                but this machine is ${pkgs.stdenv.hostPlatform.system}. Use `sd-card',
+                which follows the machine's architecture.
+              '';
+            }
+          ];
+        }
+      )
+    );
 
   # Resolve a user-facing format name against a registry.
   #

@@ -21,8 +21,7 @@
   qcow = "qemu";
   qcow-efi = "qemu-efi";
 
-  # Upstream has a single `sd-card` variant that selects the per-architecture
-  # module from `pkgs.targetPlatform.qemuArch`, replacing the two explicit ones.
-  sd-aarch64 = "sd-card";
-  sd-x86_64 = "sd-card";
+  # `sd-aarch64` / `sd-x86_64` are not aliases: upstream's single `sd-card`
+  # follows the machine's architecture, so a plain alias would quietly build the
+  # wrong one. See `archPinnedFormats` in ./registry.nix.
 }

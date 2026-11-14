@@ -9,11 +9,33 @@
 {
   name,
   config,
+  options,
   lib,
   ...
 }:
 let
   inherit (lib) mkOption types;
+
+  # Whether `nixos` was assigned rather than left to its default. Its default
+  # sits at `mkOptionDefault` priority (1500); any assignment beats that.
+  adopted = options.nixos.highestPrio < (lib.mkOptionDefault null).priority;
+
+  # Options that only feed the default `nixos`, and so do nothing once it is
+  # adopted. Compared against their defaults by value: `!=` on a list or attrset
+  # checks the length first, so this never forces a module.
+  ignoredOptions = lib.optionals adopted (
+    lib.optional (config.modules != [ ]) "modules"
+    ++ lib.optional (config.system != null) "system"
+    ++ lib.optional (config.specialArgs != { }) "specialArgs"
+  );
+
+  warnIgnored = lib.warnIf (ignoredOptions != [ ]) ''
+    vm-parts: vms.${name}.nixos is assigned directly, so
+    ${lib.concatMapStringsSep ", " (o: "vms.${name}.${o}") ignoredOptions} ${
+      if lib.length ignoredOptions == 1 then "has" else "have"
+    } no effect.
+    Set them on the configuration you assigned instead, or stop assigning `nixos`.
+  '';
 
   # The machine we build when `nixos` is not assigned directly.
   defaultNixos = config.nixpkgs.lib.nixosSystem {
@@ -203,9 +225,41 @@ in
       description = "Top-level flake output attribute this machine's formats appear under.";
     };
 
+    exposeAsPackages = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Whether to also expose each format as
+        `packages.<system>.<outputName>-<format>`, where `<system>` is this
+        machine's `nixpkgs.hostPlatform`.
+
+        The top-level `<outputName>.<format>` outputs are unaffected. What this
+        adds is discoverability: `nix flake show` lists `packages` by name, while
+        the top-level outputs show only as `unknown`. The cost is that tools
+        which evaluate every package (`nix flake show`, `nix flake check`) then
+        evaluate every format listed in {option}`formats` -- never more.
+
+        The `.file` attribute is not mirrored; use the top-level output for it.
+      '';
+    };
+
     exportNixosConfiguration = mkOption {
       type = types.bool;
       default = false;
+      apply =
+        export:
+        if export && adopted then
+          throw ''
+            vm-parts: vms.${name}.exportNixosConfiguration is set, but vms.${name}.nixos
+            was assigned directly. An adopted configuration already lives
+            wherever you took it from; exporting it again would define the same
+            `nixosConfigurations` entry twice.
+
+            Drop `exportNixosConfiguration`, and export the configuration from
+            where it is defined (e.g. `flake.nixosConfigurations.<name>`).
+          ''
+        else
+          export;
       description = ''
         Whether to also expose {option}`nixos` as
         `nixosConfigurations.<outputName>`, for `nixos-rebuild`.
@@ -218,9 +272,9 @@ in
         `nixosConfigurations` entry that fails `nix flake check`.
 
         Turn it on for machines that are also complete systems in their own
-        right. Do not turn it on for a machine whose {option}`nixos` was adopted
-        from `flake.nixosConfigurations` -- that would define the same output
-        attribute twice.
+        right. Setting it on a machine whose {option}`nixos` was assigned
+        directly is an error: export that configuration from wherever it is
+        defined instead.
       '';
     };
 
@@ -242,11 +296,12 @@ in
         inherit (config) nixos;
       })
       extras
+      (registryLib.archPinnedFormats config.formatModules)
       flakeConfig.formatModules
     ];
 
     # `genAttrs` over the requested names only: formats that were not asked for
     # are never evaluated. See the laziness contract in the README.
-    outputs = lib.genAttrs config.formats mkFormatOutput;
+    outputs = warnIgnored (lib.genAttrs config.formats mkFormatOutput);
   };
 }

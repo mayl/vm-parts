@@ -15,5 +15,8 @@
 
   # Real configuration goes here.
 
-  system.stateVersion = "25.05";
+  # The NixOS release this machine was first installed with -- set it to the
+  # release of your nixpkgs when you create the machine, then leave it alone.
+  # It is not an "upgrade to" knob; see `man configuration.nix`.
+  system.stateVersion = "26.05";
 }

@@ -1,8 +1,9 @@
 # Checks over ./example.nix.
 #
 # Everything here is eval-only: it instantiates derivations but never builds a
-# disk image, so `nix flake check` stays cheap enough to run in CI. The one real
-# build lives in `buildChecks` and is deliberately kept out of the default set.
+# disk image, so `nix flake check` stays cheap enough to run in CI. Real builds
+# and VM tests live in `buildChecks` (exposed as `legacyPackages.<system>.tests`)
+# and are deliberately kept out of the default set.
 {
   pkgs,
   example,
@@ -24,6 +25,52 @@ let
       system = "x86_64-linux";
       modules = [ ];
       formats = [ "vm" ];
+    };
+  };
+
+  # Two machines claiming one output name. `listToAttrs` would silently keep
+  # one of them, so this must throw instead.
+  duplicateNameFlake = mkTestFlake {
+    vms = {
+      a = {
+        system = "x86_64-linux";
+        outputName = "same";
+        formats = [ "vm" ];
+      };
+      b = {
+        system = "x86_64-linux";
+        outputName = "same";
+        formats = [ "vm" ];
+      };
+    };
+  };
+
+  # Another flake module declares a `customOutput` flake output; a machine may
+  # not take that name either.
+  declaredOutputFlake = mkTestFlake {
+    imports = [
+      {
+        options.flake = lib.mkOption {
+          type = lib.types.submoduleWith {
+            modules = [ { options.customOutput = lib.mkOption { default = null; }; } ];
+          };
+        };
+      }
+    ];
+    vms.x = {
+      system = "x86_64-linux";
+      outputName = "customOutput";
+      formats = [ "vm" ];
+    };
+  };
+
+  # Exporting an adopted configuration would define its nixosConfigurations
+  # entry twice; refused with a vm-parts error instead.
+  adoptedExportFlake = mkTestFlake {
+    vms.adopted = {
+      nixos = example.adoptedMachine.vm.nixos;
+      formats = [ "vm" ];
+      exportNixosConfiguration = true;
     };
   };
 
@@ -74,6 +121,67 @@ let
       !(builtins.tryEval (builtins.attrNames reservedNameFlake)).success
     ) "a machine named `packages' should be refused")
 
+    # A machine named after an output that some other flake module declares
+    # (not in vm-parts' static list) is refused too.
+    (assertMsg (
+      !(builtins.tryEval (builtins.attrNames declaredOutputFlake)).success
+    ) "an outputName matching a declared flake output should be refused")
+
+    # Two machines sharing an output name are refused, not silently merged.
+    (assertMsg (
+      !(builtins.tryEval (builtins.attrNames duplicateNameFlake)).success
+    ) "two machines with the same outputName should be refused")
+
+    # `outputName` governs both the format outputs and the nixosConfigurations
+    # entry.
+    (assertMsg (
+      example ? renamed && !(example ? renamedMachine)
+    ) "outputName should rename the top-level output")
+    (assertMsg (
+      example.nixosConfigurations ? renamed && !(example.nixosConfigurations ? renamedMachine)
+    ) "exportNixosConfiguration should export under outputName")
+
+    (assertMsg (
+      !(builtins.tryEval (builtins.attrNames adoptedExportFlake.nixosConfigurations)).success
+    ) "exportNixosConfiguration on an adopted nixos should throw")
+
+    # Flake-level formatModules are re-exported, and only those.
+    (assertMsg (
+      lib.attrNames example.formatModules == [ "shared-iso" ]
+    ) "formatModules should re-export exactly the flake-level definitions")
+
+    # User aliases resolve, and a user definition overrides a built-in alias.
+    (assertMsg (
+      example.aliasMachine.my-vbox.config.image.extension == "ova"
+    ) "a user-defined alias should resolve")
+    (assertMsg (
+      example.aliasMachine.gce.config.image.extension == "qcow2"
+    ) "a user formatAliases definition should override the built-in alias")
+
+    # Architecture-pinned SD card formats.
+    (assertMsg (lib.hasPrefix "img" example.sdMachine.sd-x86_64.config.image.extension) "sd-x86_64 should be the sd-card image variant on an x86_64 machine")
+    (assertMsg (
+      !(builtins.tryEval example.sdMachine.sd-aarch64.drvPath).success
+    ) "sd-aarch64 on an x86_64 machine should fail its architecture assertion")
+
+    # The opt-in `packages` mirror: exactly the requested formats of the machines
+    # that opted in, and nothing for anyone else.
+    (assertMsg
+      (
+        lib.attrNames example.packages.x86_64-linux == [
+          "inlineMachine-iso"
+          "inlineMachine-kexec-bundle"
+          "inlineMachine-vbox"
+          "inlineMachine-vm"
+          "inlineMachine-vm-nogui"
+        ]
+      )
+      "exposeAsPackages should mirror exactly the requested formats, got ${toString (lib.attrNames example.packages.x86_64-linux)}"
+    )
+    (assertMsg (
+      example.packages.x86_64-linux.inlineMachine-vm.drvPath == example.inlineMachine.vm.drvPath
+    ) "a mirrored package should be the same derivation as the top-level output")
+
     # Laziness: `boom` sits in inlineMachine's registry and would throw if it were
     # ever evaluated. Reaching a different format must not touch it. This is the
     # regression test for the invariant that the registry is indexed, never
@@ -103,6 +211,8 @@ in
           example.adoptedMachine.vm.drvPath
           example.standaloneMachine.vm-bootloader.drvPath
           example.overrideMachine.vbox.drvPath
+          example.renamed.vm.drvPath
+          example.sdMachine.sd-x86_64.drvPath
         ]
       )
     );
@@ -111,5 +221,6 @@ in
   # Real builds. Expensive; wired up separately, not part of `nix flake check`.
   buildChecks = {
     build-vm = example.inlineMachine.vm;
+    kexec-bundle = import ./kexec-bundle.nix { inherit pkgs; };
   };
 }

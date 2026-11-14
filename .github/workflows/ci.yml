@@ -10,17 +10,22 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
       # Eval-only: instantiates every example format's derivation without
-      # building a disk image. The real build lives in `packages.build-vm` and is
-      # not run here.
+      # building a disk image. The real builds live under
+      # `legacyPackages.<system>.tests` and are not run here.
+      #
+      # `abort-on-warn` keeps the evaluation warning-free, so that a nixpkgs
+      # deprecation shows up as a red build on the lock-update PR rather than as
+      # a log line nobody reads. (That is how kexec-bundle's dependency on the
+      # since-removed scripted initrd went unnoticed.)
       - name: nix flake check
-        run: nix flake check --print-build-logs
+        run: nix flake check --print-build-logs --option abort-on-warn true
 
       - name: Formatting is clean
         run: |
@@ -29,6 +34,11 @@ jobs:
 
       # The template is the first thing a new user runs, and nothing else
       # exercises it. Initialise it in a scratch directory against this checkout.
+      #
+      # The template ships no flake.lock, so this evaluates against whatever
+      # nixos-unstable and flake-parts are *today*, not against this repo's lock.
+      # That is deliberate -- it is what a new user gets -- and it makes this step
+      # a canary: it can go red with no commit here, when upstream moves.
       - name: Template evaluates
         run: |
           set -euo pipefail
@@ -38,4 +48,9 @@ jobs:
           git init -q . && git add -A
           # `nix flake lock` refuses to write a lock with a path input, so
           # override at eval time instead of locking first.
-          nix eval --raw --override-input vm-parts "$GITHUB_WORKSPACE" .#myMachine.vm.drvPath
+          for output in vm vbox vbox.file iso; do
+            echo "::group::myMachine.$output"
+            nix eval --raw --override-input vm-parts "$GITHUB_WORKSPACE" ".#myMachine.$output.drvPath"
+            echo
+            echo "::endgroup::"
+          done

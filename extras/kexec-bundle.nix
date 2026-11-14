@@ -54,20 +54,15 @@
       '';
     };
 
-    # nixpkgs' netboot chain already defines this, so overriding rather than
-    # adding is required -- without mkForce the module system reports
-    # `kexec_tarball' as defined in multiple locations.
-    kexec_tarball = lib.mkForce (
-      pkgs.callPackage "${toString modulesPath}/../lib/make-system-tarball.nix" {
-        storeContents = [
-          {
-            object = config.system.build.kexec_script;
-            symlink = "/kexec_nixos";
-          }
-        ];
-        contents = [ ];
-      }
-    );
+    kexec_tarball = pkgs.callPackage "${toString modulesPath}/../lib/make-system-tarball.nix" {
+      storeContents = [
+        {
+          object = config.system.build.kexec_script;
+          symlink = "/kexec_nixos";
+        }
+      ];
+      contents = [ ];
+    };
 
     kexec_tarball_self_extract_script = pkgs.writeTextFile {
       executable = true;
@@ -103,23 +98,41 @@
     "boot.panic_on_fail" # reboot the machine upon fatal boot issues
   ];
   systemd.services.sshd.wantedBy = lib.mkForce [ "multi-user.target" ];
-  networking.hostName = lib.mkDefault "kexec";
+  # Weaker than `mkDefault`, so that a machine that sets its own hostname at
+  # `mkDefault` (as the NixOS test framework does) wins instead of conflicting.
+  networking.hostName = lib.mkOverride 1200 "kexec";
 
-  # The bundle's whole point is SSH takeover: kexec_script above injects an
-  # `authorized_keys` into the initrd, and this copies it into the booted system.
+  # netboot-minimal enables ZFS support, and nixpkgs warns on every evaluation
+  # until `forceImportRoot` is set explicitly. Root here is a tmpfs, so there is
+  # no ZFS root to force-import; `false` is also the upcoming nixpkgs default.
+  boot.zfs.forceImportRoot = lib.mkDefault false;
+
+  # The bundle's whole point is SSH takeover. kexec_script above appends a
+  # second cpio archive holding `/authorized_keys` (taken from the old system's
+  # /ssh_pubkey) to the initrd; the kernel unpacks it over the initramfs root.
+  # This unit then copies it into the new system before switching root.
   #
-  # `boot.initrd.postMountCommands` is a scripted-stage-1 API and asserts out
-  # under systemd stage 1, so pin this format to scripted stage 1. That is what
-  # the nixos-generators original ran under, which keeps the port faithful rather
-  # than shipping an untested systemd-initrd translation. Porting it to
-  # `boot.initrd.systemd.services` (and /sysroot rather than /mnt-root) is
-  # tracked separately.
-  boot.initrd.systemd.enable = lib.mkForce false;
-
-  boot.initrd.postMountCommands = ''
-    mkdir -p /mnt-root/root/.ssh/
-    cp /authorized_keys /mnt-root/root/.ssh/
-  '';
+  # nixos-generators did this with `boot.initrd.postMountCommands`, a scripted
+  # stage 1 hook. Scripted stage 1 was removed from nixpkgs in 26.11, so this is
+  # the systemd stage 1 equivalent: `/sysroot` is the new root (scripted stage 1
+  # called it /mnt-root), and `initrd-fs.target` is the point at which it and
+  # everything under it is mounted.
+  boot.initrd.systemd.services.kexec-authorized-keys = {
+    description = "Install the kexec bundle's SSH authorized_keys for root";
+    wantedBy = [ "initrd.target" ];
+    after = [ "initrd-fs.target" ];
+    before = [ "initrd.target" ];
+    unitConfig = {
+      DefaultDependencies = false;
+      ConditionPathExists = "/authorized_keys";
+    };
+    serviceConfig.Type = "oneshot";
+    script = ''
+      mkdir -p -m 0700 /sysroot/root/.ssh
+      cp /authorized_keys /sysroot/root/.ssh/authorized_keys
+      chmod 0600 /sysroot/root/.ssh/authorized_keys
+    '';
+  };
 
   format.attr = "kexec_bundle";
   format.filePath = null;

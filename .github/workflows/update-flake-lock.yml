@@ -1,0 +1,31 @@
+name: Update flake.lock
+
+# Weekly PR bumping nixpkgs and flake-parts, so upstream changes reach CI
+# while they are still small.
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - uses: DeterminateSystems/update-flake-lock@v29
+        with:
+          pr-title: "flake.lock: update"
+          # PRs opened with the default GITHUB_TOKEN do not trigger other
+          # workflows, so CI would not run on them. Add a fine-grained PAT
+          # (contents + pull-requests: write) as the FLAKE_LOCK_TOKEN secret to
+          # get CI on the PR; without it this still opens the PR, and CI can be
+          # started by hand with workflow_dispatch.
+          token: ${{ secrets.FLAKE_LOCK_TOKEN || github.token }}

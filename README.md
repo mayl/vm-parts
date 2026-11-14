@@ -81,6 +81,7 @@ nixpkgs variants become available on a bump with no change here.
 | `formatModules` | attrs of module | `{}` | Per-machine format registry additions and customisations. |
 | `outputName` | string | the attribute name | Flake output attribute to appear under. |
 | `exportNixosConfiguration` | bool | `false` | Also expose as `nixosConfigurations.<outputName>`. |
+| `exposeAsPackages` | bool | `false` | Also expose each format as `packages.<system>.<outputName>-<format>`, for `nix flake show`. |
 
 `specialArgs` is empty by default — if your modules expect an `inputs` argument,
 pass it yourself:
@@ -92,8 +93,12 @@ vms.myMachine.specialArgs = { inherit inputs; };
 `exportNixosConfiguration` is off by default because a format-agnostic machine
 has no valid standalone `system.build.toplevel`; exporting one would give you a
 `nixosConfigurations` entry that fails `nix flake check`. Turn it on for machines
-that are also complete systems. Never turn it on for a machine whose `nixos` you
-adopted from `flake.nixosConfigurations` — that defines the same output twice.
+that are also complete systems. Turning it on for a machine whose `nixos` you
+assigned directly is an error: export that configuration from wherever it is
+defined instead.
+
+When `nixos` is assigned directly, `modules`, `system` and `specialArgs` have no
+effect, and setting them produces an evaluation warning saying so.
 
 ### Flake-level
 
@@ -159,7 +164,6 @@ Renamed upstream; the old name works as an alias:
 | `do` | `digital-ocean` |
 | `gce` | `google-compute` |
 | `install-iso` | `iso-installer` |
-| `sd-aarch64`, `sd-x86_64` | `sd-card` |
 
 Unchanged: `amazon`, `azure`, `cloudstack`, `hyperv`, `iso`, `kubevirt`,
 `linode`, `lxc`, `lxc-metadata`, `openstack`, `proxmox`, `proxmox-lxc`, `raw`,
@@ -168,9 +172,20 @@ Unchanged: `amazon`, `azure`, `cloudstack`, `hyperv`, `iso`, `kubevirt`,
 No upstream equivalent, shipped in [`extras/`](./extras): `vm`, `vm-nogui`,
 `vm-bootloader`, `kexec-bundle`.
 
+`sd-aarch64` and `sd-x86_64` still work, but they are not plain aliases. Upstream
+replaced them with a single `sd-card` that follows the machine's architecture,
+so these wrap `sd-card` and fail with an assertion when the machine's
+architecture doesn't match the name. On new configurations, use `sd-card`.
+
 Watch out for `kexec`: nixpkgs has a variant by that name, but it is the netboot
 payload, not nixos-generators' tarball. The self-extracting bundle is
 `kexec-bundle` here.
+
+`kexec-bundle` usage: put a public key at `/ssh_pubkey` on the host you are
+taking over, run the bundle as root, and the new system boots with that key in
+root's `authorized_keys`. The bundle unpacks its closure into `/nix/store`, so
+the host's `/nix/store` must be writable or absent. That rules out a NixOS host
+with the default read-only store mount.
 
 ### Discovering what is available
 
@@ -213,17 +228,24 @@ module which throws if evaluated.
 Machines land at the **top level** of the flake, which is what makes
 `nix build .#myMachine.vm` work literally. Two consequences, both deliberate:
 
-- The outputs are not partitioned by system, so `nix flake check` notes unknown
-  top-level outputs (a warning, not a failure) and `nix flake show` will evaluate
-  every format.
-- A machine named after a standard flake output (`packages`, `checks`, `lib`, …)
-  is refused up front. Use `outputName` to rename it.
+- The outputs are not partitioned by system, so `nix flake check` warns about an
+  unknown top-level output (a warning, not a failure), and `nix flake show`
+  lists the machine as `unknown` without naming its formats. Set
+  `exposeAsPackages = true` on a machine to also get
+  `packages.<system>.<outputName>-<format>`, which `nix flake show` lists by
+  name. The cost: `nix flake show` and `nix flake check` then evaluate every
+  format in that machine's `formats`. Formats you didn't list are still never
+  evaluated.
+- A machine named after a standard flake output (`packages`, `checks`, `lib`,
+  or any output another flake module declares) is refused up front, and so are
+  two machines with the same `outputName`. Use `outputName` to rename one.
 
 ## Development
 
 ```console
-$ nix flake check          # eval-only: instantiates every format, builds none
-$ nix build .#build-vm     # the one real image build, kept out of flake check
+$ nix flake check                  # eval-only: instantiates every format, builds none
+$ nix build .#tests.build-vm       # a real VM build, kept out of flake check
+$ nix build .#tests.kexec-bundle   # NixOS VM test: kexec into the bundle, check the SSH key hand-off
 $ nix fmt
 ```
 
