@@ -1,127 +1,47 @@
-# Agent Instructions
+# vm-parts: notes for agents
 
-This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
+A flake-parts module: `vms.<name>` declares a NixOS machine, and each name in
+its `formats` becomes a top-level flake output (`nix build .#<name>.<format>`).
+README.md is the user-facing reference; read it before changing behaviour.
 
-> **Architecture in one line:** Issues live in a local Dolt database
-> (`.beads/dolt/`); cross-machine sync uses `bd dolt push/pull` (a
-> git-compatible protocol), stored under `refs/dolt/data` on your git
-> remote — separate from `refs/heads/*` where your code lives.
-> `.beads/issues.jsonl` is a passive export, not the wire protocol.
->
-> See [sync-concepts](https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md)
-> for the one-screen overview and anti-patterns (don't treat JSONL as the
-> source of truth; don't `bd import` during normal operation; don't
-> reach for third-party Dolt hosting before trying the default).
+## Layout
 
-## Quick Reference
+- `flake-module.nix`: the public entry point (`flakeModules.default`).
+- `modules/vms.nix`: flake-level options and output wiring.
+- `modules/vm-submodule.nix`: the `vms.<name>` submodule, one `extendModules`
+  per requested format.
+- `modules/registry.nix`: builds and resolves the per-machine format registry
+  from nixpkgs' `image.modules`.
+- `modules/format-options.nix`: the `format.attr` / `format.filePath` contract.
+- `modules/aliases.nix`: nixos-generators names mapped to nixpkgs names.
+- `extras/`: formats nixpkgs lacks (`vm*`, `kexec-bundle`).
+- `tests/`: the example flake and its checks.
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work atomically
-bd close <id>         # Complete work
-bd dolt push          # Push beads data to remote
+## Commands
+
+```console
+$ nix flake check              # eval-only; must stay that way (see below)
+$ nix fmt                      # nixfmt-tree; CI fails on any diff
+$ nix build .#tests.build-vm   # a real VM build
+$ nix build .#tests.kexec-bundle  # NixOS VM test: kexec into the bundle
 ```
 
-## Non-Interactive Shell Commands
+CI (`.github/workflows/ci.yml`) runs `nix flake check`, the format check and
+a template smoke test. It does not run the `tests.*` builds; run those yourself
+when you touch `extras/`.
 
-**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
+## Invariants
 
-Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
-
-**Use these forms instead:**
-```bash
-# Force overwrite without prompting
-cp -f source dest           # NOT: cp source dest
-mv -f source dest           # NOT: mv source dest
-rm -f file                  # NOT: rm file
-
-# For recursive operations
-rm -rf directory            # NOT: rm -r directory
-cp -rf source dest          # NOT: cp -r source dest
-```
-
-**Other commands that may prompt:**
-- `scp` - use `-o BatchMode=yes` for non-interactive
-- `ssh` - use `-o BatchMode=yes` to fail instead of prompting
-- `apt-get` - use `-y` flag
-- `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
-
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:1105d646 -->
-## Beads Issue Tracker
-
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
-
-### Quick Reference
-
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
-
-### Rules
-
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
-
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md for details and anti-patterns.
-
-## Agent Context Profiles
-
-The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
-
-- **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
-- **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
-- **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
-
-## Session Completion
-
-This protocol applies when ending a Beads implementation workflow. It is subordinate to explicit user, repository, and orchestrator instructions.
-
-1. **File issues for remaining work** - Create beads for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **Handle git/sync by active profile**:
-   ```bash
-   # Conservative/minimal/default: report status and proposed commands; wait for approval.
-   git status
-
-   # Team-maintainer opt-in only, unless current instructions forbid it:
-   git pull --rebase
-   git push
-   git status
-   ```
-5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
-
-**Critical rules:**
-- Explicit user or orchestrator instructions override this Beads block.
-- Do not commit or push without clear authority from the active profile or the current user request.
-- If a required sync or push is blocked, stop and report the exact command and error.
-<!-- END BEADS INTEGRATION -->
-
-<!-- BEGIN BEADS CODEX SETUP: generated by bd setup codex -->
-## Beads Issue Tracker
-
-Use Beads (`bd`) for durable task tracking in repositories that include it. Use the `beads` skill at `.agents/skills/beads/SKILL.md` (project install) or `~/.agents/skills/beads/SKILL.md` (global install) for Beads workflow guidance, then use the `bd` CLI for issue operations.
-
-### Quick Reference
-
-```bash
-bd ready                # Find available work
-bd show <id>            # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>           # Complete work
-bd prime                # Refresh Beads context
-```
-
-### Rules
-
-- Use `bd` for all task tracking; do not create markdown TODO lists.
-- Run `bd prime` when Beads context is missing or stale. Codex 0.129.0+ can load Beads context automatically through native hooks; use `/hooks` to inspect or toggle them.
-- Keep persistent project memory in Beads via `bd remember`; do not create ad hoc memory files.
-
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md for details and anti-patterns.
-<!-- END BEADS CODEX SETUP -->
+- **Laziness.** A format not listed in `formats` must never be evaluated.
+  Index the registry (`registry.${name}`, `?`); never traverse it
+  (`filterAttrs`, `attrValues`, `mapAttrsToList`) on an unconditional path.
+  `attrNames` is fine. `tests/example.nix` plants a `boom` format that throws if
+  evaluated; keep that test passing.
+- **Checks are eval-only.** `checks.eval` instantiates derivations and
+  discards their string context so that `nix flake check` builds nothing.
+  Anything that builds an image or boots a VM goes under
+  `legacyPackages.<system>.tests`, not `checks`.
+- **Warning-free.** CI runs `nix flake check` with `abort-on-warn`. Silence
+  a nixpkgs warning at its source; don't let one in.
+- **Every bug fix gets a check** in `tests/checks.nix`. Negative cases that
+  throw while computing output names need their own `mkTestFlake` evaluation.
